@@ -1,0 +1,347 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─────────────────────────────────────────
+// USER & AUTH
+// ─────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  passwordHash  String
+  role          Role      @default(SISWA)
+  school        String?
+  phone         String?
+  grade         Int?                          // Khusus siswa (1-6)
+  isVerified    Boolean   @default(false)
+  verifyToken   String?
+  resetToken    String?
+  resetExpiry   DateTime?
+  avatarUrl     String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relasi GURU
+  classrooms      Classroom[]
+  materials       Material[]
+  quizzes         Quiz[]
+  activities      Activity[]
+  posts           Post[]
+  reflections     Reflection[]
+  proyekHijauList ProyekHijau[]
+
+  // Relasi SISWA
+  memberships     ClassroomMember[]
+  quizResponses   QuizResponse[]
+  activityLogs    ActivityLog[]
+  proyekSubmits   ProyekHijauSubmit[]
+
+  // Shared
+  notifications   Notification[]
+  sentNotifs      Notification[]    @relation("NotifSender")
+}
+
+enum Role {
+  ADMIN
+  GURU
+  SISWA
+}
+
+// ─────────────────────────────────────────
+// KELAS
+// ─────────────────────────────────────────
+
+model Classroom {
+  id          String              @id @default(cuid())
+  name        String
+  code        String              @unique  // Kode join siswa (misal: ECO-4A-X7K2)
+  subject     String
+  grade       Int
+  description String?
+  isActive    Boolean             @default(true)
+  teacherId   String
+  teacher     User                @relation(fields: [teacherId], references: [id])
+  createdAt   DateTime            @default(now())
+
+  members     ClassroomMember[]
+  materials   ClassroomMaterial[]
+  quizzes     ClassroomQuiz[]
+  activities  Activity[]
+  proyeks     ProyekHijau[]
+}
+
+model ClassroomMember {
+  id          String    @id @default(cuid())
+  classroomId String
+  classroom   Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  studentId   String
+  student     User      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  joinedAt    DateTime  @default(now())
+
+  @@unique([classroomId, studentId])
+}
+
+// ─────────────────────────────────────────
+// KONTEN — MATERI & RPP
+// ─────────────────────────────────────────
+
+model Material {
+  id          String              @id @default(cuid())
+  title       String
+  description String?
+  subject     String
+  grade       Int
+  type        MaterialType
+  fileUrl     String?             // Cloudflare R2 URL
+  youtubeUrl  String?
+  content     String?             // Rich text / markdown
+  thumbnailUrl String?
+  status      ContentStatus       @default(DRAFT)
+  authorId    String
+  author      User                @relation(fields: [authorId], references: [id])
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  classrooms  ClassroomMaterial[]
+}
+
+model ClassroomMaterial {
+  id          String    @id @default(cuid())
+  classroomId String
+  classroom   Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  materialId  String
+  material    Material  @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  assignedAt  DateTime  @default(now())
+
+  @@unique([classroomId, materialId])
+}
+
+enum MaterialType {
+  MATERI
+  RPP
+  MODUL
+  MEDIA
+  INFOGRAFIS
+}
+
+enum ContentStatus {
+  DRAFT
+  REVIEW
+  PUBLISHED
+  REJECTED
+}
+
+// ─────────────────────────────────────────
+// E-LKPD & KUIS
+// ─────────────────────────────────────────
+
+model Quiz {
+  id          String          @id @default(cuid())
+  title       String
+  description String?
+  duration    Int?            // Durasi dalam menit, null = tidak dibatasi
+  passingScore Float          @default(70)
+  authorId    String
+  author      User            @relation(fields: [authorId], references: [id])
+  questions   QuizQuestion[]
+  classrooms  ClassroomQuiz[]
+  responses   QuizResponse[]
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+}
+
+model ClassroomQuiz {
+  id          String    @id @default(cuid())
+  classroomId String
+  classroom   Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  quizId      String
+  quiz        Quiz      @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  openAt      DateTime?
+  closeAt     DateTime?
+  assignedAt  DateTime  @default(now())
+
+  @@unique([classroomId, quizId])
+}
+
+model QuizQuestion {
+  id       String @id @default(cuid())
+  quizId   String
+  quiz     Quiz   @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  text     String
+  options  Json   // ["Pilihan A", "Pilihan B", "Pilihan C", "Pilihan D"]
+  answer   String // Index jawaban benar: "0", "1", "2", "3"
+  order    Int
+  imageUrl String?
+}
+
+model QuizResponse {
+  id          String   @id @default(cuid())
+  quizId      String
+  quiz        Quiz     @relation(fields: [quizId], references: [id])
+  studentId   String
+  student     User     @relation(fields: [studentId], references: [id])
+  classroomId String
+  answers     Json     // { "questionId": "jawaban", ... }
+  score       Float
+  submittedAt DateTime @default(now())
+
+  @@unique([quizId, studentId, classroomId])
+}
+
+// ─────────────────────────────────────────
+// AKTIVITAS PEMBELAJARAN
+// ─────────────────────────────────────────
+
+model Activity {
+  id          String        @id @default(cuid())
+  title       String
+  description String
+  type        ActivityType
+  fileUrl     String?
+  classroomId String
+  classroom   Classroom     @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  authorId    String
+  author      User          @relation(fields: [authorId], references: [id])
+  dueDate     DateTime?
+  logs        ActivityLog[]
+  createdAt   DateTime      @default(now())
+}
+
+model ActivityLog {
+  id         String      @id @default(cuid())
+  activityId String
+  activity   Activity    @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  studentId  String
+  student    User        @relation(fields: [studentId], references: [id])
+  status     LogStatus   @default(BELUM)
+  fileUrl    String?     // File submission siswa
+  note       String?
+  updatedAt  DateTime    @default(now()) @updatedAt
+
+  @@unique([activityId, studentId])
+}
+
+enum ActivityType {
+  DISKUSI
+  LEMBAR_KERJA
+  STUDI_KASUS
+  PRESENTASI
+}
+
+enum LogStatus {
+  BELUM
+  SEDANG
+  SELESAI
+  DINILAI
+}
+
+// ─────────────────────────────────────────
+// PROYEK HIJAU (GreenMetric)
+// ─────────────────────────────────────────
+
+model ProyekHijau {
+  id          String              @id @default(cuid())
+  title       String
+  description String
+  category    GreenCategory
+  classroomId String
+  classroom   Classroom           @relation(fields: [classroomId], references: [id])
+  authorId    String
+  author      User                @relation(fields: [authorId], references: [id])
+  dueDate     DateTime?
+  submits     ProyekHijauSubmit[]
+  createdAt   DateTime            @default(now())
+}
+
+model ProyekHijauSubmit {
+  id          String      @id @default(cuid())
+  proyekId    String
+  proyek      ProyekHijau @relation(fields: [proyekId], references: [id], onDelete: Cascade)
+  studentId   String
+  student     User        @relation(fields: [studentId], references: [id])
+  description String
+  fileUrl     String?
+  imageUrl    String?
+  status      LogStatus   @default(BELUM)
+  note        String?     // Catatan guru
+  submittedAt DateTime    @default(now())
+
+  @@unique([proyekId, studentId])
+}
+
+enum GreenCategory {
+  SETTING_INFRASTRUCTURE
+  ENERGY_CLIMATE
+  WASTE
+  WATER
+  TRANSPORTATION
+  EDUCATION_RESEARCH
+}
+
+// ─────────────────────────────────────────
+// KOMUNITAS MGMP (khusus GURU)
+// ─────────────────────────────────────────
+
+model Post {
+  id        String   @id @default(cuid())
+  title     String?
+  content   String
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id])
+  parentId  String?
+  parent    Post?    @relation("PostReplies", fields: [parentId], references: [id])
+  replies   Post[]   @relation("PostReplies")
+  likes     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────
+// REFLEKSI GURU
+// ─────────────────────────────────────────
+
+model Reflection {
+  id        String   @id @default(cuid())
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id])
+  title     String
+  content   String
+  date      DateTime
+  mood      String?  // "baik", "cukup", "perlu-perbaikan"
+  createdAt DateTime @default(now())
+}
+
+// ─────────────────────────────────────────
+// NOTIFIKASI
+// ─────────────────────────────────────────
+
+model Notification {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  senderId   String?
+  sender     User?    @relation("NotifSender", fields: [senderId], references: [id])
+  title      String
+  message    String
+  type       NotifType @default(INFO)
+  isRead     Boolean  @default(false)
+  link       String?
+  createdAt  DateTime @default(now())
+}
+
+enum NotifType {
+  INFO
+  KUIS_BARU
+  MATERI_BARU
+  AKTIVITAS_BARU
+  NILAI_KELUAR
+  KOMUNITAS
+}
